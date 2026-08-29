@@ -25,59 +25,55 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           content: content.slice(0, 2000),
-          allowed_mentions: {
-            parse: [],
-            users: pingUser ? [pingUser] : [],
-            roles: [ROLE_ID]
-          }
+          allowed_mentions: { parse: [], users: pingUser ? [pingUser] : [], roles: [ROLE_ID] }
         })
       });
     } catch (err) {}
   }
 
-  // Erkennt den exakten Namen des Gifts aus der API-Antwort
-  function getGiftName(data) {
-    if (!data) return "Discord Gift";
-    var text = JSON.stringify(data).toLowerCase();
+  // Verbesserte Namenserkennung: Liest nun API-Antwort UND die Original-Nachricht (Embeds) aus
+  function getGiftName(result, message) {
+    var combinedData = { r: result, m: message?.embeds, g: message?.gift_info, gi: message?.giftInfo };
+    var text = JSON.stringify(combinedData).toLowerCase();
     
-    // Avatar Dekorationen filtern
-    if (data.collectibles_product || data.collectiblesProduct || text.includes("avatar decoration") || text.includes("collectibles")) {
-        var decoName = data.collectibles_product?.name || data.collectiblesProduct?.name || data.sku?.name || data.store_listing?.sku?.name;
+    // 1. Dekorationen filtern
+    if (text.includes("avatar decoration") || text.includes("collectibles") || text.includes("avatardecoration")) {
+        var decoName = result?.collectibles_product?.name || result?.collectiblesProduct?.name || result?.sku?.name || result?.store_listing?.sku?.name || message?.gift_info?.name;
         return decoName ? decoName : "Avatar Decoration";
     }
-    // Nitro filtern
+    // 2. Nitro Basic filtern
     if (text.includes("basic")) {
         return (text.includes("year") || text.includes("annual")) ? "Nitro Basic Yearly" : "Nitro Basic Monthly";
     }
+    // 3. Normales Nitro / Boost filtern
     if (text.includes("year") || text.includes("annual")) return "Nitro Yearly";
     if (text.includes("nitro")) return "Nitro Monthly";
     
-    return data.sku?.name || data.store_listing?.sku?.name || "Discord Gift";
+    // 4. Fallback auf den direkten Namen
+    return result?.sku?.name || result?.store_listing?.sku?.name || message?.gift_info?.name || "Discord Gift";
   }
 
-  async function claimGiftNative(code, currentUserId) {
+  async function claimGiftNative(code, currentUserId, message) {
     try {
       var GiftActions = vendetta.metro.findByProps("redeemGiftCode");
       if (!GiftActions || !GiftActions.redeemGiftCode) return;
 
-      var delay = Math.floor(Math.random() * (2500 - 1000 + 1)) + 1000;
-      await new Promise(r => setTimeout(r, delay));
-
+      // KÜNSTLICHE VERZÖGERUNG WURDE ENTFERNT FÜR MAXIMALE GESCHWINDIGKEIT
       var reqStart = performance.now();
-      // Führt den Claim aus und fängt die Daten zum Gift ab
+      
+      // Führt den Claim direkt aus
       var result = await GiftActions.redeemGiftCode({ code: code });
       var duration = ((performance.now() - reqStart) / 1000).toFixed(2) + "s";
       
-      var giftName = getGiftName(result);
+      // Liest den korrekten Namen aus API und Nachricht aus
+      var giftName = getGiftName(result, message);
 
-      showToast("🎁 " + giftName + " erfolgreich eingelöst!");
+      showToast("🎁 " + giftName + " eingelöst (" + duration + ")");
 
-      // Webhook wird NUR NOCH HIER bei einem erfolgreichen Claim gesendet
       var userLabel = currentUserId ? "<@" + currentUserId + ">" : "Unknown user";
       sendWebhookMessage(EMOJI + " Successfully claimed `" + giftName + "` in `" + duration + "` for " + userLabel + " <@&" + ROLE_ID + ">", currentUserId);
 
     } catch (error) {
-      // Fehler schicken keinen Webhook mehr, sondern zeigen nur noch ein Toast in der App an
       var errorMessage = String(error?.message || error?.body?.message || error).toLowerCase();
       var errorCode = Number(error?.code || error?.body?.code);
       var reason = "Abgelehnt";
@@ -125,8 +121,6 @@
         
         if (!dispatcher) return;
 
-        // Der Test-Webhook wurde hier restlos entfernt. Das Plugin ist nun völlig still, bis es etwas fängt.
-
         messageListener = function (event) {
           try {
             var message = event && event.message;
@@ -143,14 +137,14 @@
               seenCodes.add(code);
               if (seenCodes.size > 50) seenCodes.clear();
 
-              showToast("Gift-Link erkannt! Versuche Claim...");
-              claimGiftNative(code, currentUserId);
+              // Übergibt nun auch die "message" für die Namenserkennung
+              claimGiftNative(code, currentUserId, message);
             });
           } catch (error) {}
         };
 
         dispatcher.subscribe("MESSAGE_CREATE", messageListener);
-        showToast("Nitro Claimer aktiviert (Silent Mode).");
+        showToast("Nitro Claimer aktiviert (Fast Mode).");
       } catch (err) {}
     },
     onUnload: function () {
