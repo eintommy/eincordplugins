@@ -31,26 +31,55 @@
     } catch (err) {}
   }
 
-  // Verbesserte Namenserkennung: Liest nun API-Antwort UND die Original-Nachricht (Embeds) aus
+  // Neue Tiefensuche für den exakten Namen (wie beim PC Vencord Plugin)
   function getGiftName(result, message) {
-    var combinedData = { r: result, m: message?.embeds, g: message?.gift_info, gi: message?.giftInfo };
-    var text = JSON.stringify(combinedData).toLowerCase();
-    
-    // 1. Dekorationen filtern
-    if (text.includes("avatar decoration") || text.includes("collectibles") || text.includes("avatardecoration")) {
-        var decoName = result?.collectibles_product?.name || result?.collectiblesProduct?.name || result?.sku?.name || result?.store_listing?.sku?.name || message?.gift_info?.name;
-        return decoName ? decoName : "Avatar Decoration";
+    var candidates = [];
+
+    // Rekursive Suchfunktion, die jeden Unterordner nach "name" oder "title" durchsucht
+    function findNames(obj, depth) {
+      if (!obj || typeof obj !== "object" || depth > 5) return;
+      for (var key in obj) {
+        var val = obj[key];
+        if (typeof val === "string" && (key === "name" || key === "title" || key === "display_name" || key === "slug")) {
+          if (val.trim()) candidates.push(val);
+        } else if (typeof val === "object") {
+          findNames(val, depth + 1);
+        }
+      }
     }
-    // 2. Nitro Basic filtern
-    if (text.includes("basic")) {
-        return (text.includes("year") || text.includes("annual")) ? "Nitro Basic Yearly" : "Nitro Basic Monthly";
-    }
-    // 3. Normales Nitro / Boost filtern
-    if (text.includes("year") || text.includes("annual")) return "Nitro Yearly";
-    if (text.includes("nitro")) return "Nitro Monthly";
+
+    // Durchsuche die API-Antwort und die Nachrichtendaten
+    findNames(result, 0);
+    findNames(message?.embeds, 0);
+    findNames(message?.gift_info, 0);
+    findNames(message?.giftInfo, 0);
+
+    // Filter, um Standard-Wörter zu ignorieren
+    var genericNames = ["avatar decoration", "collectibles", "discord gift", "gift", "discord", "nitro", "collectibles product"];
     
-    // 4. Fallback auf den direkten Namen
-    return result?.sku?.name || result?.store_listing?.sku?.name || message?.gift_info?.name || "Discord Gift";
+    var specificName = candidates.find(function(name) {
+      var lower = name.toLowerCase().replace(/[-_]+/g, " ").trim();
+      return lower && !genericNames.includes(lower);
+    });
+
+    if (specificName) {
+      // Namen säubern und schick machen
+      var cleanName = specificName.replace(/[-_]+/g, " ").replace(/\bavatar decoration\b/gi, "").trim();
+      if (cleanName === cleanName.toLowerCase()) {
+        cleanName = cleanName.replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+      }
+      if (cleanName) return cleanName;
+    }
+
+    // Fallbacks, falls wirklich absolut kein spezifischer Name gefunden wurde
+    var fallbackText = JSON.stringify({ r: result, m: message?.embeds, g: message?.gift_info }).toLowerCase();
+    
+    if (fallbackText.includes("avatar decoration") || fallbackText.includes("collectibles") || fallbackText.includes("avatardecoration")) return "Avatar Decoration";
+    if (fallbackText.includes("basic")) return (fallbackText.includes("year") || fallbackText.includes("annual")) ? "Nitro Basic Yearly" : "Nitro Basic Monthly";
+    if (fallbackText.includes("year") || fallbackText.includes("annual")) return "Nitro Yearly";
+    if (fallbackText.includes("nitro")) return "Nitro Monthly";
+    
+    return "Discord Gift";
   }
 
   async function claimGiftNative(code, currentUserId, message) {
@@ -58,14 +87,11 @@
       var GiftActions = vendetta.metro.findByProps("redeemGiftCode");
       if (!GiftActions || !GiftActions.redeemGiftCode) return;
 
-      // KÜNSTLICHE VERZÖGERUNG WURDE ENTFERNT FÜR MAXIMALE GESCHWINDIGKEIT
+      // START OHNE VERZÖGERUNG (0ms)
       var reqStart = performance.now();
-      
-      // Führt den Claim direkt aus
       var result = await GiftActions.redeemGiftCode({ code: code });
       var duration = ((performance.now() - reqStart) / 1000).toFixed(2) + "s";
       
-      // Liest den korrekten Namen aus API und Nachricht aus
       var giftName = getGiftName(result, message);
 
       showToast("🎁 " + giftName + " eingelöst (" + duration + ")");
@@ -82,6 +108,7 @@
       else if (errorCode === 10038 || errorMessage.includes("unknown gift") || errorMessage.includes("expired")) reason = "Ungültig oder abgelaufen";
       else if (errorMessage.includes("already redeemed")) reason = "Bereits eingelöst";
       else if (errorCode === 429 || errorMessage.includes("rate limit")) reason = "Rate Limit erreicht";
+      else if (errorMessage.includes("captcha") || errorMessage.includes("human")) reason = "Captcha/Anti-Bot Blockade";
 
       showToast("❌ " + reason);
     }
@@ -137,7 +164,6 @@
               seenCodes.add(code);
               if (seenCodes.size > 50) seenCodes.clear();
 
-              // Übergibt nun auch die "message" für die Namenserkennung
               claimGiftNative(code, currentUserId, message);
             });
           } catch (error) {}
