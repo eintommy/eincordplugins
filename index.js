@@ -1,102 +1,133 @@
 (function () {
   "use strict";
 
-  var GIFT_REGEX = /(?:discord\.gift\/|discord(?:app)?\.com\/gifts?\/)([a-zA-Z0-9]{16,24})/i;
-  var seenMessageIds = Object.create(null);
+  // Verbesserter Regex für alle Nitro- und Promo-Formate
+  var GIFT_REGEX = /(?:discord\.gift\/|discord(?:app)?\.com\/gifts?\/)([a-z\d_-]{8,128})/gi;
+  var seenCodes = new Set();
   var messageListener;
 
-  // Sichere Importe. Falls etwas fehlt, fangen wir den Fehler ab, anstatt das Plugin crashen zu lassen.
   var showToast = function(message) {
     try {
       if (vendetta && vendetta.ui && vendetta.ui.toasts) {
         vendetta.ui.toasts.showToast(message);
       } else {
-        console.log("[Nitro Claimer] " + message);
+        console.log("[Nitro Claimer V2] " + message);
       }
-    } catch (e) {
-      console.log("[Nitro Claimer] Toast-Fehler: ", e);
-    }
+    } catch (e) {}
   };
 
-async function claimGift(code, channelId) {
+  async function claimGiftNative(code) {
     try {
-      var TokenStore = vendetta.metro.findByStoreName("AuthenticationStore") || vendetta.metro.findByProps("getToken");
-      var token = TokenStore ? TokenStore.getToken() : null;
-
-      if (!token) {
-        showToast("Fehler: Discord-Token nicht gefunden.");
+      // 1. Vencord Bypass: Nutze das interne Discord-Modul anstatt manueller API-Calls
+      var GiftActions = vendetta.metro.findByProps("redeemGiftCode");
+      if (!GiftActions || !GiftActions.redeemGiftCode) {
+        showToast("Fehler: Discord Redeem-Modul nicht gefunden.");
         return;
       }
 
-      // 1. Anti-Sniper-Bypass: Künstliche Verzögerung von 1,5 bis 3 Sekunden einbauen
-      var delay = Math.floor(Math.random() * (3000 - 1500 + 1)) + 1500;
-      await new Promise(resolve => setTimeout(resolve, delay));
+      // Künstliche Verzögerung beibehalten, um menschlich zu wirken
+      var delay = Math.floor(Math.random() * (2500 - 1000 + 1)) + 1000;
+      await new Promise(r => setTimeout(r, delay));
 
-      var response = await fetch("https://discord.com/api/v9/entitlements/gift-codes/" + code + "/redeem", {
-        method: "POST",
-        headers: {
-          "Authorization": token,
-          "Content-Type": "application/json",
-          "Accept": "*/*"
-        },
-        body: JSON.stringify({
-          channel_id: channelId,
-          payment_source_id: null
-        })
-      });
+      // 2. Ruft Discords echten Einlöse-Befehl auf (umgeht Header/Captcha-Probleme)
+      await GiftActions.redeemGiftCode({ code: code });
+      showToast("🎁 Nitro erfolgreich eingelöst!");
 
-      var data = await response.json();
-
-      if (response.ok) {
-        showToast("🎁 Erfolgreich eingelöst!");
-      } else {
-        // 2. Besseres Debugging: Zeigt nun die genaue Discord-Fehlermeldung im Toast an
-        var discordError = data.message || "Unbekannter Fehler";
-        showToast("❌ Abgelehnt: " + discordError);
-        console.log("[Nitro Claimer] API Fehler Details:", data);
-      }
     } catch (error) {
-      console.log("[Nitro Claimer] Netzwerk-Fehler:", error);
+      // 3. Vencord Fehler-Parsing
+      var errorMessage = String(error?.message || error?.body?.message || error).toLowerCase();
+      var errorCode = Number(error?.code || error?.body?.code);
+
+      if (errorMessage.includes("payment source required")) {
+        showToast("❌ Abgelehnt: Promo-Link (Zahlungsmethode benötigt)");
+      } else if (errorCode === 10038 || errorMessage.includes("unknown gift") || errorMessage.includes("expired")) {
+        showToast("❌ Abgelehnt: Ungültig oder abgelaufen");
+      } else if (errorMessage.includes("already redeemed")) {
+        showToast("❌ Abgelehnt: Bereits eingelöst");
+      } else if (errorCode === 429 || errorMessage.includes("rate limit")) {
+        showToast("❌ Abgelehnt: Discord Rate Limit erreicht");
+      } else {
+        showToast("❌ Fehler: " + (error?.body?.message || "Unbekannt"));
+        console.log("[Nitro Claimer V2] Unbekannter API Fehler:", error);
+      }
     }
+  }
+
+  // Funktion zum sauberen Extrahieren aus allen Datenquellen der Nachricht
+  function extractCodes(message) {
+    var codes = [];
+    
+    // Check 1: Discords internes GiftCode Array
+    var directCodes = message.giftCodes || message.gift_codes;
+    if (Array.isArray(directCodes)) {
+      directCodes.forEach(c => { if (typeof c === "string") codes.push(c); });
+    }
+    
+    // Check 2: Im Nachrichtentext
+    if (typeof message.content === "string") {
+      var match;
+      // Reset Regex index
+      GIFT_REGEX.lastIndex = 0; 
+      while ((match = GIFT_REGEX.exec(message.content)) !== null) {
+        if (match[1]) codes.push(match[1]);
+      }
+    }
+    
+    // Check 3: In URL-Embeds
+    if (Array.isArray(message.embeds)) {
+      message.embeds.forEach(embed => {
+        if (typeof embed.url === "string") {
+          GIFT_REGEX.lastIndex = 0;
+          var match = GIFT_REGEX.exec(embed.url);
+          if (match && match[1]) codes.push(match[1]);
+        }
+      });
+    }
+    return codes;
   }
 
   return {
     onLoad: function () {
       try {
         var dispatcher = vendetta.metro.common.FluxDispatcher;
-        
-        if (!dispatcher) {
-          console.error("[Nitro Claimer] Dispatcher nicht gefunden!");
-          return;
-        }
+        var UserStore = vendetta.metro.findByProps("getCurrentUser");
+        if (!dispatcher) return;
 
         messageListener = function (event) {
           try {
             var message = event && event.message;
-            if (!message || typeof message.content !== "string") return;
+            if (!message) return;
 
-            var messageId = String(message.id || message.channel_id + ":" + message.content);
-            if (seenMessageIds[messageId]) return;
-
-            var match = GIFT_REGEX.exec(message.content);
-            if (!match) return;
-
-            seenMessageIds[messageId] = true;
-            var code = match[1];
+            // Ignoriere Bots und Webhooks
+            if (message.author && (message.author.bot || message.webhook_id)) return;
             
-            showToast("Gift-Link erkannt! Versuche Claim...");
-            claimGift(code, message.channel_id);
+            // Ignoriere eigene Nachrichten
+            var currentUserId = UserStore ? UserStore.getCurrentUser()?.id : null;
+            if (message.author && message.author.id === currentUserId) return;
+
+            var codes = extractCodes(message);
+            if (codes.length === 0) return;
+
+            codes.forEach(code => {
+              if (seenCodes.has(code)) return;
+              seenCodes.add(code);
+              
+              // Verhindert Memory-Leaks
+              if (seenCodes.size > 50) seenCodes.clear();
+
+              showToast("Gift-Link erkannt! Versuche Claim...");
+              claimGiftNative(code);
+            });
 
           } catch (error) {
-            console.log("[Nitro Claimer] Fehler im Listener:", error);
+            console.log("[Nitro Claimer V2] Fehler im Listener:", error);
           }
         };
 
         dispatcher.subscribe("MESSAGE_CREATE", messageListener);
-        showToast("Nitro Claimer aktiviert.");
-        console.log("[Nitro Claimer] Plugin erfolgreich geladen.");
+        showToast("Nitro Claimer V2 aktiviert.");
       } catch (err) {
-        console.error("[Nitro Claimer] Fataler Fehler in onLoad: ", err);
+        console.error("[Nitro Claimer V2] Fataler Fehler in onLoad: ", err);
       }
     },
 
@@ -106,11 +137,9 @@ async function claimGift(code, channelId) {
           vendetta.metro.common.FluxDispatcher.unsubscribe("MESSAGE_CREATE", messageListener);
           messageListener = undefined;
         }
-        seenMessageIds = Object.create(null);
-        showToast("Nitro Claimer deaktiviert.");
-      } catch (err) {
-        console.error("[Nitro Claimer] Fehler in onUnload: ", err);
-      }
+        seenCodes.clear();
+        showToast("Nitro Claimer V2 deaktiviert.");
+      } catch (err) {}
     }
   };
 })();
