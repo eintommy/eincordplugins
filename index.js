@@ -1,27 +1,27 @@
 (function () {
   "use strict";
 
-  // Filter für Discord Nitro Gift-Codes (greift 16-24 stellige Codes ab)
   var GIFT_REGEX = /(?:discord\.gift\/|discord(?:app)?\.com\/gifts?\/)([a-zA-Z0-9]{16,24})/i;
   var seenMessageIds = Object.create(null);
   var messageListener;
 
-  // Nutze die standardmäßige Vendetta/Kettu API für UI-Toasts
-  function showToast(message) {
+  // Sichere Importe. Falls etwas fehlt, fangen wir den Fehler ab, anstatt das Plugin crashen zu lassen.
+  var showToast = function(message) {
     try {
-      var getAssetId = vendetta.ui.assets.getAssetIDByName;
-      var show = vendetta.ui.toasts.showToast;
-      show(message, getAssetId("Check"));
-    } catch (error) {
-      console.log("[Nitro Auto-Claim] " + message, error);
+      if (vendetta && vendetta.ui && vendetta.ui.toasts) {
+        vendetta.ui.toasts.showToast(message);
+      } else {
+        console.log("[Nitro Claimer] " + message);
+      }
+    } catch (e) {
+      console.log("[Nitro Claimer] Toast-Fehler: ", e);
     }
-  }
+  };
 
-  // Funktion, die den Request direkt an den Discord-Server sendet
   async function claimGift(code, channelId) {
     try {
-      // Token-Store über den Metro-Bundler finden (funktioniert in Kettu & Bunny)
-      var TokenStore = vendetta.metro.findByProps("getToken");
+      // Versuche Token über verschiedene Kettu/Vendetta Methoden zu finden
+      var TokenStore = vendetta.metro.findByStoreName("AuthenticationStore") || vendetta.metro.findByProps("getToken");
       var token = TokenStore ? TokenStore.getToken() : null;
 
       if (!token) {
@@ -29,7 +29,6 @@
         return;
       }
 
-      // API Call an Discord
       var response = await fetch("https://discord.com/api/v9/entitlements/gift-codes/" + code + "/redeem", {
         method: "POST",
         headers: {
@@ -43,63 +42,69 @@
         })
       });
 
-      var data = await response.json();
-
       if (response.ok) {
         showToast("🎁 Nitro erfolgreich eingelöst!");
       } else {
+        var data = await response.json();
+        console.log("[Nitro Claimer] API Fehler:", data);
         showToast("❌ Code ungültig oder schon eingelöst.");
-        console.log("[Nitro Auto-Claim] API Fehler:", data);
       }
     } catch (error) {
-      console.log("[Nitro Auto-Claim] Netzwerk-Fehler:", error);
+      console.log("[Nitro Claimer] Netzwerk-Fehler:", error);
     }
   }
 
   return {
     onLoad: function () {
-      // FluxDispatcher für eingehende Events (z.B. neue Nachrichten)
-      var dispatcher = vendetta.metro.common.FluxDispatcher;
-
-      messageListener = function (event) {
-        try {
-          var message = event && event.message;
-          if (!message || typeof message.content !== "string") return;
-
-          var messageId = String(message.id || message.channel_id + ":" + message.content);
-          if (seenMessageIds[messageId]) return;
-
-          // Regex Check: Ist ein Gift-Link in der Nachricht?
-          var match = GIFT_REGEX.exec(message.content);
-          if (!match) return;
-
-          seenMessageIds[messageId] = true;
-          
-          var code = match[1]; // Den Code aus der Regex-Gruppe auslesen
-          showToast("Gift-Link erkannt! Versuche Claim...");
-          
-          // Claim-Funktion auslösen
-          claimGift(code, message.channel_id);
-
-        } catch (error) {
-          console.log("[Nitro Auto-Claim] Fehler beim Lesen der Nachricht", error);
+      try {
+        var dispatcher = vendetta.metro.common.FluxDispatcher;
+        
+        if (!dispatcher) {
+          console.error("[Nitro Claimer] Dispatcher nicht gefunden!");
+          return;
         }
-      };
 
-      // Listener an den Dispatcher hängen
-      dispatcher.subscribe("MESSAGE_CREATE", messageListener);
-      showToast("Nitro Auto-Claimer aktiviert.");
+        messageListener = function (event) {
+          try {
+            var message = event && event.message;
+            if (!message || typeof message.content !== "string") return;
+
+            var messageId = String(message.id || message.channel_id + ":" + message.content);
+            if (seenMessageIds[messageId]) return;
+
+            var match = GIFT_REGEX.exec(message.content);
+            if (!match) return;
+
+            seenMessageIds[messageId] = true;
+            var code = match[1];
+            
+            showToast("Gift-Link erkannt! Versuche Claim...");
+            claimGift(code, message.channel_id);
+
+          } catch (error) {
+            console.log("[Nitro Claimer] Fehler im Listener:", error);
+          }
+        };
+
+        dispatcher.subscribe("MESSAGE_CREATE", messageListener);
+        showToast("Nitro Claimer aktiviert.");
+        console.log("[Nitro Claimer] Plugin erfolgreich geladen.");
+      } catch (err) {
+        console.error("[Nitro Claimer] Fataler Fehler in onLoad: ", err);
+      }
     },
 
     onUnload: function () {
-      if (messageListener) {
-        // Listener beim Beenden des Plugins wieder entfernen
-        vendetta.metro.common.FluxDispatcher.unsubscribe("MESSAGE_CREATE", messageListener);
-        messageListener = undefined;
+      try {
+        if (messageListener && vendetta.metro.common.FluxDispatcher) {
+          vendetta.metro.common.FluxDispatcher.unsubscribe("MESSAGE_CREATE", messageListener);
+          messageListener = undefined;
+        }
+        seenMessageIds = Object.create(null);
+        showToast("Nitro Claimer deaktiviert.");
+      } catch (err) {
+        console.error("[Nitro Claimer] Fehler in onUnload: ", err);
       }
-
-      seenMessageIds = Object.create(null);
-      showToast("Nitro Auto-Claimer deaktiviert.");
     }
   };
 })();
