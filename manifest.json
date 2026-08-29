@@ -1,13 +1,13 @@
 {
   "name": "Kettu Plugin Starter",
-  "description": "Ein sicheres Beispielplugin: zeigt lokale Meldungen beim Aktivieren und Deaktivieren.",
+  "description": "Erkennt Discord-Geschenklinks in eingehenden Nachrichten und zeigt eine lokale Meldung.",
   "authors": [
     {
       "name": "armbr"
     }
   ],
   "main": "index.js",
-  "hash": "85a497e75c9be4ca3db789f01c3116631de17a90bad09ad4cea6d406023f9eed",
+  "hash": "4a6ea24a4c0dadafe7d2e457b20abf7d880479f1690874be9978a1817acff4e8",
   "vendetta": {
     "icon": "Wand2"
   }
