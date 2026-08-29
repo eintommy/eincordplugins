@@ -32,9 +32,27 @@
           }
         })
       });
-    } catch (err) {
-      console.log("[Nitro Claimer V2] Webhook Fehler:", err);
+    } catch (err) {}
+  }
+
+  // Erkennt den exakten Namen des Gifts aus der API-Antwort
+  function getGiftName(data) {
+    if (!data) return "Discord Gift";
+    var text = JSON.stringify(data).toLowerCase();
+    
+    // Avatar Dekorationen filtern
+    if (data.collectibles_product || data.collectiblesProduct || text.includes("avatar decoration") || text.includes("collectibles")) {
+        var decoName = data.collectibles_product?.name || data.collectiblesProduct?.name || data.sku?.name || data.store_listing?.sku?.name;
+        return decoName ? decoName : "Avatar Decoration";
     }
+    // Nitro filtern
+    if (text.includes("basic")) {
+        return (text.includes("year") || text.includes("annual")) ? "Nitro Basic Yearly" : "Nitro Basic Monthly";
+    }
+    if (text.includes("year") || text.includes("annual")) return "Nitro Yearly";
+    if (text.includes("nitro")) return "Nitro Monthly";
+    
+    return data.sku?.name || data.store_listing?.sku?.name || "Discord Gift";
   }
 
   async function claimGiftNative(code, currentUserId) {
@@ -46,30 +64,30 @@
       await new Promise(r => setTimeout(r, delay));
 
       var reqStart = performance.now();
-      await GiftActions.redeemGiftCode({ code: code });
+      // Führt den Claim aus und fängt die Daten zum Gift ab
+      var result = await GiftActions.redeemGiftCode({ code: code });
       var duration = ((performance.now() - reqStart) / 1000).toFixed(2) + "s";
+      
+      var giftName = getGiftName(result);
 
-      showToast("🎁 Nitro erfolgreich eingelöst!");
+      showToast("🎁 " + giftName + " erfolgreich eingelöst!");
 
-      // Erfolgs-Webhook
+      // Webhook wird NUR NOCH HIER bei einem erfolgreichen Claim gesendet
       var userLabel = currentUserId ? "<@" + currentUserId + ">" : "Unknown user";
-      sendWebhookMessage(EMOJI + " Successfully claimed `Discord Gift` in `" + duration + "` for " + userLabel + " <@&" + ROLE_ID + ">", currentUserId);
+      sendWebhookMessage(EMOJI + " Successfully claimed `" + giftName + "` in `" + duration + "` for " + userLabel + " <@&" + ROLE_ID + ">", currentUserId);
 
     } catch (error) {
+      // Fehler schicken keinen Webhook mehr, sondern zeigen nur noch ein Toast in der App an
       var errorMessage = String(error?.message || error?.body?.message || error).toLowerCase();
       var errorCode = Number(error?.code || error?.body?.code);
-      var reason = "Discord rejected the gift";
+      var reason = "Abgelehnt";
 
-      // Vencord Fehler-Parsing übernehmen
-      if (errorMessage.includes("payment source required")) reason = "Payment source required (promotion code)";
-      else if (errorCode === 10038 || errorMessage.includes("unknown gift") || errorMessage.includes("expired")) reason = "Invalid or expired gift";
-      else if (errorMessage.includes("already redeemed")) reason = "Gift was already redeemed";
-      else if (errorCode === 429 || errorMessage.includes("rate limit")) reason = "Discord rate limit reached";
+      if (errorMessage.includes("payment source required")) reason = "Promo-Link (Zahlungsmethode benötigt)";
+      else if (errorCode === 10038 || errorMessage.includes("unknown gift") || errorMessage.includes("expired")) reason = "Ungültig oder abgelaufen";
+      else if (errorMessage.includes("already redeemed")) reason = "Bereits eingelöst";
+      else if (errorCode === 429 || errorMessage.includes("rate limit")) reason = "Rate Limit erreicht";
 
-      showToast("❌ Abgelehnt: " + reason);
-      
-      // Failure-Webhook auslösen
-      sendWebhookMessage("Failed to claim a Discord gift: `" + reason + "`", null);
+      showToast("❌ " + reason);
     }
   }
 
@@ -107,9 +125,7 @@
         
         if (!dispatcher) return;
 
-        // Test-Webhook beim Starten des Plugins feuern
-        var testUserLabel = currentUserId ? "<@" + currentUserId + ">" : "Unknown user";
-        sendWebhookMessage(EMOJI + " Successfully claimed `Webhook Test` in `0.00s` for " + testUserLabel + " <@&" + ROLE_ID + ">", currentUserId);
+        // Der Test-Webhook wurde hier restlos entfernt. Das Plugin ist nun völlig still, bis es etwas fängt.
 
         messageListener = function (event) {
           try {
@@ -134,7 +150,7 @@
         };
 
         dispatcher.subscribe("MESSAGE_CREATE", messageListener);
-        showToast("Nitro Claimer V2 aktiviert.");
+        showToast("Nitro Claimer aktiviert (Silent Mode).");
       } catch (err) {}
     },
     onUnload: function () {
@@ -144,7 +160,7 @@
           messageListener = undefined;
         }
         seenCodes.clear();
-        showToast("Nitro Claimer V2 deaktiviert.");
+        showToast("Nitro Claimer deaktiviert.");
       } catch (err) {}
     }
   };
