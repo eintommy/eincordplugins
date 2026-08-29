@@ -18,9 +18,8 @@
     }
   };
 
-  async function claimGift(code, channelId) {
+async function claimGift(code, channelId) {
     try {
-      // Versuche Token über verschiedene Kettu/Vendetta Methoden zu finden
       var TokenStore = vendetta.metro.findByStoreName("AuthenticationStore") || vendetta.metro.findByProps("getToken");
       var token = TokenStore ? TokenStore.getToken() : null;
 
@@ -28,6 +27,10 @@
         showToast("Fehler: Discord-Token nicht gefunden.");
         return;
       }
+
+      // 1. Anti-Sniper-Bypass: Künstliche Verzögerung von 1,5 bis 3 Sekunden einbauen
+      var delay = Math.floor(Math.random() * (3000 - 1500 + 1)) + 1500;
+      await new Promise(resolve => setTimeout(resolve, delay));
 
       var response = await fetch("https://discord.com/api/v9/entitlements/gift-codes/" + code + "/redeem", {
         method: "POST",
@@ -42,12 +45,15 @@
         })
       });
 
+      var data = await response.json();
+
       if (response.ok) {
-        showToast("🎁 Nitro erfolgreich eingelöst!");
+        showToast("🎁 Erfolgreich eingelöst!");
       } else {
-        var data = await response.json();
-        console.log("[Nitro Claimer] API Fehler:", data);
-        showToast("❌ Code ungültig oder schon eingelöst.");
+        // 2. Besseres Debugging: Zeigt nun die genaue Discord-Fehlermeldung im Toast an
+        var discordError = data.message || "Unbekannter Fehler";
+        showToast("❌ Abgelehnt: " + discordError);
+        console.log("[Nitro Claimer] API Fehler Details:", data);
       }
     } catch (error) {
       console.log("[Nitro Claimer] Netzwerk-Fehler:", error);
