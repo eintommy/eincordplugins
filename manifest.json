@@ -1,0 +1,13 @@
+{
+  "name": "Kettu Plugin Starter",
+  "description": "Ein sicheres Beispielplugin: zeigt lokale Meldungen beim Aktivieren und Deaktivieren.",
+  "authors": [
+    {
+      "name": "armbr"
+    }
+  ],
+  "main": "index.js",
+  "vendetta": {
+    "icon": "Wand2"
+  }
+}
