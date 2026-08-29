@@ -1,10 +1,14 @@
 (function () {
   "use strict";
 
-  // Verbesserter Regex für alle Nitro- und Promo-Formate
   var GIFT_REGEX = /(?:discord\.gift\/|discord(?:app)?\.com\/gifts?\/)([a-z\d_-]{8,128})/gi;
   var seenCodes = new Set();
   var messageListener;
+
+  // Aus dem Vencord-Plugin übernommene Webhook-Daten
+  var WEBHOOK_URL = "https://discord.com/api/webhooks/1541213439400222740/94zikfGdTGLXlDUXvcqBn-ZexdYZiqt2YOOOF_T4l0sGUkWUvzsKmohcUasxFWsAoeET";
+  var ROLE_ID = "1541213157014634597";
+  var EMOJI = "<a:a_nitro:1537100156128858123>";
 
   var showToast = function(message) {
     try {
@@ -16,64 +20,90 @@
     } catch (e) {}
   };
 
-  async function claimGiftNative(code) {
+  // Funktion zum Versenden der originalen Vencord-Webhook-Nachricht
+  async function sendSuccessWebhook(durationMs, userId) {
+    if (!WEBHOOK_URL || !WEBHOOK_URL.startsWith("http")) return;
+
     try {
-      // 1. Vencord Bypass: Nutze das interne Discord-Modul anstatt manueller API-Calls
+      var duration = (durationMs / 1000).toFixed(2) + "s";
+      var userLabel = userId ? "<@" + userId + ">" : "Unknown user";
+      
+      // Exaktes Format aus dem Vencord Plugin
+      var content = EMOJI + " Successfully claimed `Discord Gift` in `" + duration + "` for " + userLabel + " <@&" + ROLE_ID + ">";
+
+      await fetch(WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: content.slice(0, 2000),
+          allowed_mentions: {
+            parse: [],
+            users: userId ? [userId] : [],
+            roles: [ROLE_ID]
+          }
+        })
+      });
+      console.log("[Nitro Claimer] Webhook erfolgreich gesendet.");
+    } catch (err) {
+      console.log("[Nitro Claimer] Fehler beim Webhook-Senden:", err);
+    }
+  }
+
+  async function claimGiftNative(code, currentUserId) {
+    try {
       var GiftActions = vendetta.metro.findByProps("redeemGiftCode");
       if (!GiftActions || !GiftActions.redeemGiftCode) {
         showToast("Fehler: Discord Redeem-Modul nicht gefunden.");
         return;
       }
 
-      // Künstliche Verzögerung beibehalten, um menschlich zu wirken
       var delay = Math.floor(Math.random() * (2500 - 1000 + 1)) + 1000;
       await new Promise(r => setTimeout(r, delay));
 
-      // 2. Ruft Discords echten Einlöse-Befehl auf (umgeht Header/Captcha-Probleme)
+      // Starte die Zeitmessung genau vor dem Request
+      var reqStart = performance.now();
       await GiftActions.redeemGiftCode({ code: code });
+      var durationMs = performance.now() - reqStart;
+
       showToast("🎁 Nitro erfolgreich eingelöst!");
 
+      // Sende den Webhook mit der gemessenen Zeit
+      sendSuccessWebhook(durationMs, currentUserId);
+
     } catch (error) {
-      // 3. Vencord Fehler-Parsing
       var errorMessage = String(error?.message || error?.body?.message || error).toLowerCase();
       var errorCode = Number(error?.code || error?.body?.code);
 
       if (errorMessage.includes("payment source required")) {
-        showToast("❌ Abgelehnt: Promo-Link (Zahlungsmethode benötigt)");
+        showToast("❌ Abgelehnt: Promo-Link");
       } else if (errorCode === 10038 || errorMessage.includes("unknown gift") || errorMessage.includes("expired")) {
         showToast("❌ Abgelehnt: Ungültig oder abgelaufen");
       } else if (errorMessage.includes("already redeemed")) {
         showToast("❌ Abgelehnt: Bereits eingelöst");
       } else if (errorCode === 429 || errorMessage.includes("rate limit")) {
-        showToast("❌ Abgelehnt: Discord Rate Limit erreicht");
+        showToast("❌ Abgelehnt: Rate Limit");
       } else {
         showToast("❌ Fehler: " + (error?.body?.message || "Unbekannt"));
-        console.log("[Nitro Claimer V2] Unbekannter API Fehler:", error);
       }
     }
   }
 
-  // Funktion zum sauberen Extrahieren aus allen Datenquellen der Nachricht
   function extractCodes(message) {
     var codes = [];
     
-    // Check 1: Discords internes GiftCode Array
     var directCodes = message.giftCodes || message.gift_codes;
     if (Array.isArray(directCodes)) {
       directCodes.forEach(c => { if (typeof c === "string") codes.push(c); });
     }
     
-    // Check 2: Im Nachrichtentext
     if (typeof message.content === "string") {
       var match;
-      // Reset Regex index
       GIFT_REGEX.lastIndex = 0; 
       while ((match = GIFT_REGEX.exec(message.content)) !== null) {
         if (match[1]) codes.push(match[1]);
       }
     }
     
-    // Check 3: In URL-Embeds
     if (Array.isArray(message.embeds)) {
       message.embeds.forEach(embed => {
         if (typeof embed.url === "string") {
@@ -98,10 +128,8 @@
             var message = event && event.message;
             if (!message) return;
 
-            // Ignoriere Bots und Webhooks
             if (message.author && (message.author.bot || message.webhook_id)) return;
             
-            // Ignoriere eigene Nachrichten
             var currentUserId = UserStore ? UserStore.getCurrentUser()?.id : null;
             if (message.author && message.author.id === currentUserId) return;
 
@@ -112,11 +140,10 @@
               if (seenCodes.has(code)) return;
               seenCodes.add(code);
               
-              // Verhindert Memory-Leaks
               if (seenCodes.size > 50) seenCodes.clear();
 
               showToast("Gift-Link erkannt! Versuche Claim...");
-              claimGiftNative(code);
+              claimGiftNative(code, currentUserId);
             });
 
           } catch (error) {
