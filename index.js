@@ -1,7 +1,8 @@
 (function () {
   "use strict";
 
-  var GIFT_LINK = /(?:https?:\/\/)?(?:www\.)?(?:discord\.gift|discord(?:app)?\.com\/gifts?)\/[A-Za-z0-9_-]{8,128}/i;
+  // Aktualisierter Regex mit Capture-Group (Klammern) für den 16-24 stelligen Nitro-Code
+  var GIFT_REGEX = /(?:discord\.gift\/|discord(?:app)?\.com\/gifts?\/)([a-zA-Z0-9]{16,24})/i;
   var seenMessageIds = Object.create(null);
   var messageListener;
 
@@ -11,7 +12,46 @@
       var show = vendetta.ui.toasts.showToast;
       show(message, getAssetId("Check"));
     } catch (error) {
-      console.log("[Kettu Plugin Starter] " + message, error);
+      console.log("[Nitro Auto-Claim] " + message, error);
+    }
+  }
+
+  // Neue Funktion für den API-Request an Discord
+  async function claimGift(code, channelId) {
+    try {
+      // Discord User-Token über Vendettas Metro-Bundler abrufen
+      var TokenStore = vendetta.metro.findByProps("getToken");
+      var token = TokenStore ? TokenStore.getToken() : null;
+
+      if (!token) {
+        showToast("Fehler: Discord-Token nicht gefunden.");
+        return;
+      }
+
+      // Claim-Request direkt an Discord senden
+      var response = await fetch("https://discord.com/api/v9/entitlements/gift-codes/" + code + "/redeem", {
+        method: "POST",
+        headers: {
+          "Authorization": token,
+          "Content-Type": "application/json",
+          "Accept": "*/*"
+        },
+        body: JSON.stringify({
+          channel_id: channelId,
+          payment_source_id: null
+        })
+      });
+
+      var data = await response.json();
+
+      if (response.ok) {
+        showToast("🎁 Nitro erfolgreich eingelöst!");
+      } else {
+        showToast("❌ Code ungültig oder schon geclaimt.");
+        console.log("[Nitro Auto-Claim] API Fehler:", data);
+      }
+    } catch (error) {
+      console.log("[Nitro Auto-Claim] Netzwerk-Fehler:", error);
     }
   }
 
@@ -22,32 +62,40 @@
       messageListener = function (event) {
         try {
           var message = event && event.message;
-          if (!message || typeof message.content !== "string") return;
+          if (!message || typeof message.content !== "string") return;[cite: 1]
 
-          var messageId = String(message.id || message.channel_id + ":" + message.content);
-          if (seenMessageIds[messageId] || !GIFT_LINK.test(message.content)) return;
+          var messageId = String(message.id || message.channel_id + ":" + message.content);[cite: 1]
+          if (seenMessageIds[messageId]) return;[cite: 1]
 
-          seenMessageIds[messageId] = true;
-          showToast("Discord-Geschenklink erkannt.");
+          // Prüfen, ob ein Link existiert und den eigentlichen Code extrahieren
+          var match = GIFT_REGEX.exec(message.content);
+          if (!match) return;
+
+          seenMessageIds[messageId] = true;[cite: 1]
+          
+          var code = match[1];
+          showToast("Gift-Link erkannt! Versuche einzulösen...");
+          
+          // Auto-Claim starten
+          claimGift(code, message.channel_id);
+
         } catch (error) {
-          console.log("[Kettu Plugin Starter] Nachricht konnte nicht geprüft werden", error);
+          console.log("[Nitro Auto-Claim] Nachricht konnte nicht geprüft werden", error);[cite: 1]
         }
       };
 
-      dispatcher.subscribe("MESSAGE_CREATE", messageListener);
-      showToast("Gift-Link-Erkennung aktiviert.");
-      console.log("[Kettu Plugin Starter] Gift-Link-Erkennung aktiviert");
+      dispatcher.subscribe("MESSAGE_CREATE", messageListener);[cite: 1]
+      showToast("Nitro Auto-Claimer aktiviert.");[cite: 1]
     },
 
     onUnload: function () {
       if (messageListener) {
-        vendetta.metro.common.FluxDispatcher.unsubscribe("MESSAGE_CREATE", messageListener);
-        messageListener = undefined;
+        vendetta.metro.common.FluxDispatcher.unsubscribe("MESSAGE_CREATE", messageListener);[cite: 1]
+        messageListener = undefined;[cite: 1]
       }
 
-      seenMessageIds = Object.create(null);
-      showToast("Gift-Link-Erkennung deaktiviert.");
-      console.log("[Kettu Plugin Starter] Gift-Link-Erkennung deaktiviert");
+      seenMessageIds = Object.create(null);[cite: 1]
+      showToast("Nitro Auto-Claimer deaktiviert.");[cite: 1]
     }
   };
 })()
